@@ -14,6 +14,8 @@ end
 const GLYPHS = [
   "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
   "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+  "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+  "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
   "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
 ]
 
@@ -21,14 +23,14 @@ glyph_image = nothing
 
 draw_glyph!(image::Matrix{Gray{N0f8}}, g::Glyph) = begin
   global glyph_image
-  if isnothing(glyph_image) # || size(glyph_image) != size(image)
+  if isnothing(glyph_image) || size(glyph_image) != size(image)
     glyph_image = zeros(RGB24, size(image))
   else
     glyph_image .= zero(RGB24)
   end
   cr = CairoContext(CairoImageSurface(glyph_image))
   # Transform the canvas to match cairo and julia images coord systems.
-  rotate(cr, π/2); translate(cr, 0.0, -size(image, 1))
+  rotate(cr, π/2); scale(cr, 1.0, -1.0)
   set_source_rgb(cr, 1.0, 1.0, 1.0)
   select_font_face(cr, "Sans", Cairo.FONT_SLANT_NORMAL, Cairo.FONT_WEIGHT_NORMAL)
   set_font_size(cr, g.size_x)  # TODO: size_y.
@@ -50,7 +52,7 @@ end
 @gen glyph(width::Int, height::Int) = begin
   pos_x = round(Int16, {:pos_x} ~ normal(width/2, width/4))
   pos_y = round(Int16, {:pos_y} ~ normal(height/2, height/4))
-  size_x ~ uniform_discrete(width÷6, width÷2)
+  size_x ~ uniform_discrete(width÷12, width÷3)
   size_y = size_x  # TODO: size_y ~ uniform_discrete(width÷6, width÷2)
   rotation = 0     # TODO: rotation ~ uniform(-20.0, 20.0)
   id ~ uniform_discrete(1, length(GLYPHS))
@@ -83,6 +85,31 @@ end
 
 # Proposals
 
+make_glyph_match_probs() = begin
+  nglyphs = length(GLYPHS)
+  S = zeros(Float64, nglyphs, nglyphs)
+  image_i = zeros(Gray{N0f8}, 50, 50)
+  image_j = zeros(Gray{N0f8}, 50, 50)
+  nglyphs = length(GLYPHS)
+  for i= 1:nglyphs, j = i:nglyphs
+    image_i .= zero(Gray{N0f8})
+    image_j .= zero(Gray{N0f8})
+    draw_glyph!(image_i, Glyph(i, 25, 25, 30, 30, 0, 0.1))
+    draw_glyph!(image_j, Glyph(j, 25, 25, 30, 30, 0, 0.1))
+    # S[i, j] = S[j, i] = sum(image_i .>= 0.1 .&& image_j .>= 0.1)
+    S[i, j] = S[j, i] = sum(image_i .== image_j)
+  end
+  for i = 1:nglyphs
+    S[:, i] .= S[:, i] ./ sum(S[:, i])
+  end
+  S
+end
+
+@gen random_glyph_step(tr, i, glyph_transition_probs) = begin
+  glyph_id = tr[(:glyph, i) => :id]
+  {(:glyph, i) => :id} ~ categorical(glyph_transition_probs[:, glyph_id])
+end
+
 @gen random_walk_discrete(tr, addr, step) = begin
   {addr} ~ uniform_discrete(tr[addr]-step, tr[addr]+step)
 end
@@ -96,9 +123,11 @@ end
 run(image::Matrix{Gray{N0f8}}) = begin
   height, width = size(image)
   f = GLMakie.Figure(resolution=(width*2 + 100, height + 100))
-  axl = GLMakie.Axis(f[1,1])
-  axr = GLMakie.Axis(f[1,2])
+  axl = GLMakie.Axis(f[1,1], yreversed = true)
+  axr = GLMakie.Axis(f[1,2], yreversed = true)
   image!(axl, permuteddimsview(image, (2,1)))
+
+  glyph_transition_probs = make_glyph_match_probs()
 
   obs = choicemap()
   for x = 1:width, y = 1:height
@@ -115,18 +144,12 @@ run(image::Matrix{Gray{N0f8}}) = begin
     i = ceil(Int, rand() * 10)
     tr, _ = Gen.mh(tr, Gen.select((:is_present, i)))
     if tr[(:is_present, i)]
-      # o = ceil(Int, rand() * 10)
-      # if i != o && tr[(:is_present, o)]
-      #   for k = 1:5
-      #     tr, _ = Gen.mh(tr, Gen.select((:glyph, i) => :id, (:glyph, o) => :id))
-      #   end
-      # end
-      for j = 1:10
-        for k = 1:5
+      for j = 1:3
+        for k = 1:3
           iter += 1
           image!(axr, permuteddimsview(get_retval(tr), (2,1)))
           print("\riterations: $iter        ")
-          tr, _ = Gen.mh(tr, Gen.select((:glyph, i) => :id))
+          tr, _ = Gen.mh(tr, random_glyph_step, (i, glyph_transition_probs))
         end
         tr, _ = Gen.mh(tr, random_walk, ((:glyph, i) => :pos_x, 5.0))
         tr, _ = Gen.mh(tr, random_walk, ((:glyph, i) => :pos_y, 5.0))
@@ -138,7 +161,6 @@ run(image::Matrix{Gray{N0f8}}) = begin
     end 
     tr, _ = Gen.mh(tr, Gen.select(:global_blur))
     tr, _ = Gen.mh(tr, Gen.select(:epsilon))
-    # tr, _ = Gen.update(tr, obs) # This should be redundant, I think.
 
     image!(axr, permuteddimsview(get_retval(tr), (2,1)))
     print("\riterations: $iter (outer)")
@@ -150,7 +172,7 @@ end
 
 show_prior(width, height) = begin
   f = GLMakie.Figure(resolution=(width*4+200, height*3+200))
-  ax = [GLMakie.Axis(f[y, x]) for y = 1:3, x = 1:4]
+  ax = [GLMakie.Axis(f[y, x], yreversed = true) for y = 1:3, x = 1:4]
   for x = 1:4, y = 1:3
     tr = simulate(captcha, (width, height))
     image!(ax[y, x], permuteddimsview(get_retval(tr), (2,1)))
@@ -159,7 +181,7 @@ show_prior(width, height) = begin
 end
 
 if !@isdefined captcha_image
-  captcha_image = load("captcha.png")
+  captcha_image = load("captcha_3.png")
   captcha_image_half = Gray{N0f8}.(restrict(captcha_image))
   captcha_image_quar = Gray{N0f8}.(restrict(captcha_image_half))
   captcha_image_octa = Gray{N0f8}.(restrict(captcha_image_quar))
