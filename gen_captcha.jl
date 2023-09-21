@@ -20,12 +20,14 @@ const GLYPHS = [
 # Render #######################################################################
 
 blur_image!(image::Matrix{T}, blur::Float64) where T = begin
-  k = Kernel.gaussian(blur)
-  # https://github.com/JuliaImages/ImageFiltering.jl/issues/268
-  if size(k, 1) < 33
-    imfilter!(image, image, k)
-  else
-    @warn "blur_image! with big blur: $blur"
+  if blur > 0.0
+    k = Kernel.gaussian(blur)
+    # https://github.com/JuliaImages/ImageFiltering.jl/issues/268
+    if size(k, 1) < 33
+      imfilter!(image, image, k)
+    else
+      @warn "blur_image! with big blur: $blur"
+    end
   end
 end
 
@@ -143,17 +145,27 @@ run_inference(image::Matrix{Gray{N0f8}}, inference_step, inference_args) = begin
   aspect = width/height
   f = GLMakie.Figure(resolution=(2*250*aspect, 250))
   axl = GLMakie.Axis(f[1,1], yreversed = true)
-  axr = GLMakie.Axis(f[1,2], yreversed = true)
+  axm = GLMakie.Axis(f[1,2], yreversed = true)
+  axr = GLMakie.Axis(f[1,3], yreversed = true)
   image!(axl, permuteddimsview(image, (2,1)))
+  image_black = fill(0.0, size(image))
+  image_diff = colorview(RGB, channelview(image), channelview(image), image_black)
+  image!(axr, permuteddimsview(image_diff, (2,1)))
 
   obs = choicemap()
   for x = 1:width, y = 1:height  obs[(:image, y, x)] = image[y, x]  end
 
   scores = Float64[]
+  times = Float64[]
+  t0 = time()
   report!(tr) = begin
-    image!(axr, permuteddimsview(get_retval(tr), (2,1)))
+    t = time() - t0
+    image!(axm, permuteddimsview(get_retval(tr), (2,1)))
+    image_diff = colorview(RGB, channelview(image), channelview(get_retval(tr)), image_black)
+    image!(axr, permuteddimsview(image_diff, (2,1)))
+    push!(times, t)
     push!(scores, get_score(tr))
-    print("\riterations: $(length(scores))   score: $(scores[end])")
+    print("\rsec_ellapsed: $(floor(Int, t)) \titers: $(length(scores)) \tscore: $(scores[end])")
   end
 
   tr, = generate(captcha, (width, height), obs)
@@ -166,7 +178,11 @@ run_inference(image::Matrix{Gray{N0f8}}, inference_step, inference_args) = begin
   end
   @label ret
   println()
+  println()
   println("glyph_cache hit ratio: $(n_found/(n_found + n_notfound))")
   println("trace score: $(get_score(tr))")
-  tr, scores
+  axb = GLMakie.Axis(f[2,:])
+  lines!(axb, times, scores)
+  display(f)
+  tr, f
 end

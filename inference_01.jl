@@ -82,23 +82,19 @@ inference_step(image, tr, report!, keep_going, glyph_transition_probs) = begin
   i = ceil(Int, rand() * MAX_NUM_GLYPHS)
   tr, _ = mh(tr, select((:is_present, i)))
   if tr[(:is_present, i)]
-    for j = 1:3
-      tr, _ = mh(tr, random_merge_close_glyphs, (size(image, 2), size(image, 1)))
-      for k = 1:3
-        tr, _ = mh(tr, random_glyph_step, (i, glyph_transition_probs))
-        report!(tr)
-      end
-      tr, _ = mh(tr, random_walk, ((:glyph, i) => :pos_x, 5.0))
-      tr, _ = mh(tr, random_walk, ((:glyph, i) => :pos_y, 5.0))
-      tr, _ = mh(tr, random_walk_discrete, ((:glyph, i) => :size_x, 5))
-      tr, _ = mh(tr, select((:glyph, i) => :blur))
-
+    for k = 1:10
+      tr, _ = mh(tr, random_glyph_step, (i, glyph_transition_probs))
       report!(tr)
-      if !keep_going[]  return tr  end
     end
+    tr, _ = mh(tr, random_walk, ((:glyph, i) => :pos_x, 10.0))
+    tr, _ = mh(tr, random_walk, ((:glyph, i) => :pos_y, 10.0))
+    tr, _ = mh(tr, random_walk_discrete, ((:glyph, i) => :size_x, 2))
+    tr, _ = mh(tr, random_walk, ((:glyph, i) => :blur, 2.0))
+
+    report!(tr)
+    if !keep_going[]  return tr  end
   end 
-  tr, _ = mh(tr, select(:global_blur))
-  tr, _ = mh(tr, select(:epsilon))
+  tr, _ = mh(tr, select(:epsilon, :global_blur))
   tr
 end
 
